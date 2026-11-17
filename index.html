@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>Dash Board</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f5f2; --card: #fff; --text: #16181a; --muted: #8b8e91; --line: #d3d6cf; --accent: #166534; --bad: #c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1110; --card: #181a19; --text: #eef0ec; --muted: #8b8f8a; --line: #363a37; --accent: #2f9e5b; --bad: #ef7a6c; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: grid; place-items: center; padding: 16px; }
+  form { width: 100%; max-width: 340px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 28px 24px; }
+  h1 { margin: 0 0 22px; font-size: 24px; font-weight: 800; text-align: center; }
+  label { display: block; font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
+  input { width: 100%; font: inherit; color: inherit; background: transparent; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; outline: none; }
+  input:focus { border-color: var(--accent); }
+  button { width: 100%; margin-top: 12px; font: inherit; font-weight: 700; color: #fff; background: var(--accent); border: 0; border-radius: 10px; padding: 11px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  #msg { min-height: 20px; margin: 10px 0 0; font-size: 13px; color: var(--bad); text-align: center; }
+  #msg.wait { color: var(--muted); }
+</style>
+</head>
+<body>
+<form id="f" autocomplete="on">
+  <h1>Dash Board</h1>
+  <label for="pw">Password</label>
+  <input id="pw" type="password" autocomplete="current-password" autofocus required>
+  <button id="go" type="submit">Enter</button>
+  <p id="msg" role="status"></p>
+</form>
+<script>
+(function () {
+  var f = document.getElementById('f'), pw = document.getElementById('pw'), go = document.getElementById('go'), msg = document.getElementById('msg');
+  function b64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  function say(t, wait) { msg.textContent = t; msg.className = wait ? 'wait' : ''; }
+  // 항상 캐시 없이 최신 파일을 받는다 (홈 화면 앱의 캐시 대비)
+  function fresh(name) { return fetch(name + '?t=' + Date.now(), { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }); }
+  async function unlock(pass) {
+    var P = JSON.parse(await fresh('data.json')), S = crypto.subtle;
+    var base = await S.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits']);
+    var bits = new Uint8Array(await S.deriveBits({ name: 'PBKDF2', salt: b64(P.s), iterations: P.it, hash: 'SHA-256' }, base, 512));
+    var ek = await S.importKey('raw', bits.slice(0, 32), { name: 'AES-CBC' }, false, ['decrypt']);
+    var mk = await S.importKey('raw', bits.slice(32), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+    var iv = b64(P.iv), ct = b64(P.ct), signed = new Uint8Array(iv.length + ct.length);
+    signed.set(iv); signed.set(ct, iv.length);
+    if (!(await S.verify('HMAC', mk, b64(P.mac), signed))) return null;
+    return new TextDecoder().decode(await S.decrypt({ name: 'AES-CBC', iv: iv }, ek, ct));
+  }
+  f.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    if (!window.crypto || !crypto.subtle) { say('This browser is not supported. Open the link in Safari or Chrome.'); return; }
+    go.disabled = true; say('Unlocking…', true);
+    try {
+      var ver = (await fresh('version.txt').catch(function () { return ''; })).trim();
+      var html = await unlock(pw.value);
+      if (html == null) { say('Wrong password.'); go.disabled = false; pw.select(); return; }
+      // 열어 둔 채로 다시 앱에 돌아왔을 때 새로 올린 버전이 있으면 잠금 화면으로 다시 열기
+      var watch = '<script>(function(){var v=' + JSON.stringify(ver) + ',busy=false;function chk(){if(busy||document.hidden||!v)return;busy=true;fetch("version.txt?t="+Date.now(),{cache:"no-store"}).then(function(r){return r.ok?r.text():""}).then(function(t){t=(t||"").trim();if(t&&t!==v)location.replace(location.pathname+"?v="+t);}).catch(function(){}).then(function(){busy=false;});}document.addEventListener("visibilitychange",chk);window.addEventListener("pageshow",chk);window.addEventListener("focus",chk);setInterval(chk,300000);})();<\/script>';
+      document.open(); document.write(html.replace(/<\/body>/i, watch + '</body>')); document.close();
+    } catch (err) { say('Could not open: ' + (err && err.message || err)); go.disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>
